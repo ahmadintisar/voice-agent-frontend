@@ -127,7 +127,7 @@ class VoiceAssistant {
             this.addMessage("GPT Response: " + payload.value, "assistant");
         } else if (payload.type === "audio") {
             this.setStatus("Playing response...", "ready");
-            const audio = new Audio(`http://localhost:9000${payload.value}`);
+            const audio = new Audio(`https://63f3-110-93-223-224.ngrok-free.app${payload.value}`);
             audio.play();
         } else if (payload.status === "error") {
             this.showError("Server Error: " + payload.message);
