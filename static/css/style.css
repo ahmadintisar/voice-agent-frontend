@@ -127,12 +127,18 @@ h1 {
     margin-bottom: 2rem;
 }
 
+.mic-indicator-wrapper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+}
+
 .status-indicator {
     width: 12px;
     height: 12px;
     border-radius: 50%;
     background-color: #94a3b8;
-    margin: 0 auto 0.5rem;
     transition: background-color 0.3s;
 }
 
@@ -147,6 +153,17 @@ h1 {
 
 .status-indicator.ready {
     background-color: var(--success-color);
+}
+
+.mic-icon {
+    font-size: 1.2rem;
+    opacity: 0.6;
+    transition: opacity 0.3s;
+}
+
+.status-indicator.recording + .mic-icon {
+    animation: pulse 1.5s infinite;
+    opacity: 1;
 }
 
 @keyframes pulse {
@@ -187,4 +204,4 @@ footer {
 
 ::-webkit-scrollbar-thumb:hover {
     background: #94a3b8;
-} 
+}
