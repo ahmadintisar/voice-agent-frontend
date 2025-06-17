@@ -1,18 +1,15 @@
 class VoiceAssistant {
     constructor() {
-        // DOM elements
         this.startBtn = document.getElementById('startBtn');
         this.stopBtn = document.getElementById('stopBtn');
         this.statusIndicator = document.getElementById('status-indicator');
         this.statusText = document.getElementById('status-text');
         this.chatMessages = document.getElementById('chat-messages');
         this.isRunning = false;
-        this.statusCheckInterval = null;
         this.mediaRecorder = null;
         this.silenceTimer = null;
         this.audioChunks = [];
 
-        // Bind event listeners
         this.startBtn.addEventListener('click', () => this.startRecording());
         this.stopBtn.addEventListener('click', () => this.stopRecording());
     }
@@ -35,14 +32,10 @@ class VoiceAssistant {
             };
             this.mediaRecorder.start();
 
-            // Silence detection setup
             processor.onaudioprocess = event => {
                 const input = event.inputBuffer.getChannelData(0);
                 const volume = input.reduce((acc, val) => acc + Math.abs(val), 0) / input.length;
-
-                if (volume > 0.002) {
-                    this.resetSilenceDetection();
-                }
+                if (volume > 0.002) this.resetSilenceDetection();
             };
 
             source.connect(processor);
@@ -53,7 +46,7 @@ class VoiceAssistant {
                 source.disconnect();
                 this.mediaRecorder.stop();
                 stream.getTracks().forEach(track => track.stop());
-            }, 6000); // <-- Increased from 3000ms to 6000ms
+            }, 6000);
 
             this.resetSilenceDetection = () => {
                 clearTimeout(this.silenceTimer);
@@ -66,27 +59,10 @@ class VoiceAssistant {
             };
 
             this.mediaRecorder.onstop = () => {
-                this.setStatus("Recording complete. Sending audio...", "processing");
+                this.setStatus("Recording complete. Sending...", "processing");
 
                 const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
-                const formData = new FormData();
-                formData.append('audio', audioBlob, 'input.wav');
-
-                fetch('/api/audio', {
-                    method: 'POST',
-                    body: formData
-                })
-                .then(res => {
-                    if (!res.ok) throw new Error("Failed to send audio");
-                    return res.json();
-                })
-                .then(data => {
-                    this.setStatus("Response received. Ready.", "ready");
-                    if (data.reply) this.addMessage(data.reply, "assistant");
-                })
-                .catch(err => {
-                    this.showError("Error sending audio: " + err.message);
-                });
+                this.sendAudioStream(audioBlob);
 
                 this.startBtn.disabled = false;
                 this.stopBtn.disabled = true;
@@ -100,6 +76,61 @@ class VoiceAssistant {
         if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
             this.mediaRecorder.stop();
             this.setStatus("Stopping manually...", "processing");
+        }
+    }
+
+    sendAudioStream(audioBlob) {
+        const formData = new FormData();
+        formData.append('audio', audioBlob, 'input.wav');
+
+        fetch("http://localhost:9000/api/stream-process-audio", {
+            method: "POST",
+            body: formData
+        }).then(response => {
+            if (!response.ok || !response.body) {
+                throw new Error("Failed to connect to stream.");
+            }
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder("utf-8");
+            let partialData = "";
+
+            const readStream = () => {
+                reader.read().then(({ value, done }) => {
+                    if (done) return;
+
+                    partialData += decoder.decode(value, { stream: true });
+                    const chunks = partialData.split("\n\n");
+                    partialData = chunks.pop();
+
+                    chunks.forEach(chunk => {
+                        if (chunk.startsWith("data: ")) {
+                            const payload = JSON.parse(chunk.replace("data: ", ""));
+                            this.handleStreamedEvent(payload);
+                        }
+                    });
+
+                    readStream();
+                });
+            };
+
+            readStream();
+        }).catch(err => {
+            this.showError("Error sending audio: " + err.message);
+        });
+    }
+
+    handleStreamedEvent(payload) {
+        if (payload.type === "transcript") {
+            this.addMessage(payload.value, "user");
+        } else if (payload.type === "gpt") {
+            this.addMessage("GPT Response: " + payload.value, "assistant");
+        } else if (payload.type === "audio") {
+            this.setStatus("Playing response...", "ready");
+            const audio = new Audio(`http://localhost:9000${payload.value}`);
+            audio.play();
+        } else if (payload.status === "error") {
+            this.showError("Server Error: " + payload.message);
         }
     }
 
