@@ -130,16 +130,17 @@ class VoiceAssistant {
 
             const audioUrl = `https://63f3-110-93-223-224.ngrok-free.app${payload.value}`;
             const audio = new Audio(audioUrl);
+            audio.crossOrigin = "anonymous";
+            audio.load();
 
             audio.addEventListener('canplaythrough', () => {
                 audio.play().catch(err => {
                     console.error("⚠️ Audio playback failed:", err);
+                    audio.controls = true; // show controls if autoplay fails
                     alert("Autoplay blocked. Tap the play button below.");
                 });
             });
 
-            // Fallback: add controls in case autoplay fails
-            audio.controls = true;
             this.chatMessages.appendChild(audio);
             this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
         } else if (payload.status === "error") {
