@@ -5,142 +5,105 @@ class VoiceAssistant {
         this.statusIndicator = document.getElementById('status-indicator');
         this.statusText = document.getElementById('status-text');
         this.chatMessages = document.getElementById('chat-messages');
-        this.isRunning = false;
-        this.statusCheckInterval = null;
-
         this.mediaRecorder = null;
         this.audioChunks = [];
-        this.audioContext = null;
-        this.stream = null;
-        this.analyser = null;
         this.silenceTimer = null;
-        this.silenceDuration = 2000; // 2 seconds
-        this.lastSpokeTime = null;
 
-        this.startBtn.addEventListener('click', () => this.startAssistant());
-        this.stopBtn.addEventListener('click', () => this.stopAssistant());
+        this.startBtn.addEventListener('click', () => this.startRecording());
+        this.stopBtn.addEventListener('click', () => this.stopRecordingManually());
     }
 
-    async startAssistant() {
+    async startRecording() {
+        this.statusText.textContent = "Recording...";
+        this.statusIndicator.className = 'status-indicator recording';
         this.startBtn.disabled = true;
         this.stopBtn.disabled = false;
-        this.statusText.textContent = 'Listening...';
-        this.statusIndicator.className = 'status-indicator recording';
-        this.chatMessages.innerHTML = '';
+        this.audioChunks = [];
 
         try {
-            this.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const source = this.audioContext.createMediaStreamSource(this.stream);
-            this.analyser = this.audioContext.createAnalyser();
-            source.connect(this.analyser);
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            this.mediaRecorder = new MediaRecorder(stream);
 
-            this.mediaRecorder = new MediaRecorder(this.stream);
-            this.audioChunks = [];
-
-            this.mediaRecorder.ondataavailable = event => {
-                if (event.data.size > 0) this.audioChunks.push(event.data);
+            this.mediaRecorder.ondataavailable = e => {
+                if (e.data.size > 0) {
+                    this.audioChunks.push(e.data);
+                }
             };
 
-            this.mediaRecorder.onstop = () => {
-                const blob = new Blob(this.audioChunks, { type: 'audio/webm' });
-                this.sendAudioToBackend(blob);
-            };
+            this.mediaRecorder.onstop = () => this.onRecordingStop();
 
             this.mediaRecorder.start();
-            this.lastSpokeTime = Date.now();
-            this.detectSilence();
+            this.resetSilenceDetection();
+            const audioCtx = new AudioContext();
+            const source = audioCtx.createMediaStreamSource(stream);
+            const processor = audioCtx.createScriptProcessor(2048, 1, 1);
 
-            const res = await fetch('/api/start', { method: 'POST' });
-            const data = await res.json();
-            if (data.status === 'started') {
-                this.isRunning = true;
-                this.startStatusCheck();
-            } else {
-                this.showError('Failed to start assistant');
-            }
-        } catch (err) {
-            this.showError('🎤 Mic error: ' + err.message);
+            processor.onaudioprocess = event => {
+                const input = event.inputBuffer.getChannelData(0);
+                const isSilent = input.every(sample => Math.abs(sample) < 0.01);
+                if (!isSilent) {
+                    this.resetSilenceDetection();
+                }
+            };
+
+            source.connect(processor);
+            processor.connect(audioCtx.destination);
+
+            this.silenceTimer = setTimeout(() => {
+                processor.disconnect();
+                source.disconnect();
+                this.mediaRecorder.stop();
+                stream.getTracks().forEach(track => track.stop());
+            }, 3000); // stop after 3 seconds of silence
+
+        } catch (error) {
+            this.showError("🎤 Mic error: " + error.message);
+            this.statusIndicator.className = 'status-indicator ready';
         }
     }
 
-    detectSilence() {
-        const bufferLength = this.analyser.fftSize;
-        const dataArray = new Uint8Array(bufferLength);
-
-        const checkSilence = () => {
-            if (!this.isRunning) return;
-            this.analyser.getByteTimeDomainData(dataArray);
-            const isSpeaking = dataArray.some(value => Math.abs(value - 128) > 10);
-
-            if (isSpeaking) {
-                this.lastSpokeTime = Date.now();
+    resetSilenceDetection() {
+        clearTimeout(this.silenceTimer);
+        this.silenceTimer = setTimeout(() => {
+            if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+                this.mediaRecorder.stop();
             }
-
-            const now = Date.now();
-            if (now - this.lastSpokeTime > this.silenceDuration) {
-                this.stopAssistant(); // Auto-stop on silence
-                return;
-            }
-
-            requestAnimationFrame(checkSilence);
-        };
-
-        checkSilence();
+        }, 3000); // 3 seconds of silence
     }
 
-    sendAudioToBackend(audioBlob) {
-        const formData = new FormData();
-        formData.append('audio', audioBlob, 'input.webm');
+    stopRecordingManually() {
+        this.statusText.textContent = "Stopping manually...";
+        if (this.mediaRecorder && this.mediaRecorder.state === 'recording') {
+            this.mediaRecorder.stop();
+        }
+    }
 
-        fetch('/api/audio', {
-            method: 'POST',
+    onRecordingStop() {
+        this.statusText.textContent = "Recording complete.";
+        this.stopBtn.disabled = true;
+        this.startBtn.disabled = false;
+        this.statusIndicator.className = 'status-indicator ready';
+
+        const blob = new Blob(this.audioChunks, { type: 'audio/wav' });
+        const formData = new FormData();
+        formData.append("file", blob, "audio.wav");
+
+        this.statusText.textContent = "Sending to server...";
+        fetch("/api/audio", {
+            method: "POST",
             body: formData
         })
-        .then(res => res.json())
+        .then(res => {
+            if (!res.ok) throw new Error("Failed to send audio");
+            return res.json();
+        })
         .then(data => {
-            if (data.transcript) {
-                this.addMessage(data.transcript, 'user');
-            }
+            this.statusText.textContent = "✅ Audio sent!";
+            if (data.reply) this.addMessage(data.reply, 'assistant');
         })
         .catch(err => {
-            this.showError('Error sending audio: ' + err.message);
+            this.showError("Error sending audio: " + err.message);
         });
-    }
-
-    startStatusCheck() {
-        this.statusCheckInterval = setInterval(() => {
-            fetch('/api/status')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.messages) {
-                        data.messages.forEach(msg => this.handleMessage(msg));
-                    }
-                    if (data.status === 'stopped') {
-                        this.stopAssistant();
-                    }
-                })
-                .catch(error => {
-                    console.error('Error checking status:', error);
-                });
-        }, 1000);
-    }
-
-    handleMessage(message) {
-        switch (message.type) {
-            case 'user_speech':
-            case 'user_answer':
-                this.addMessage(message.text, 'user');
-                break;
-            case 'assistant_reply':
-            case 'continue_prompt':
-                this.addMessage(message.text, 'assistant');
-                break;
-            case 'status':
-                this.statusText.textContent = message.text;
-                this.statusIndicator.className = `status-indicator ${message.state}`;
-                break;
-        }
     }
 
     addMessage(text, type) {
@@ -151,31 +114,12 @@ class VoiceAssistant {
         this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
     }
 
-    stopAssistant() {
-        if (this.statusCheckInterval) clearInterval(this.statusCheckInterval);
-        this.statusText.textContent = 'Stopped';
-        this.statusIndicator.className = 'status-indicator ready';
-        this.isRunning = false;
-
-        if (this.mediaRecorder && this.mediaRecorder.state !== 'inactive') {
-            this.mediaRecorder.stop();
-        }
-
-        if (this.stream) {
-            this.stream.getTracks().forEach(track => track.stop());
-        }
-
-        if (this.audioContext) {
-            this.audioContext.close();
-        }
-
+    showError(message) {
+        this.statusText.textContent = message;
+        this.addMessage(message, 'error');
         this.startBtn.disabled = false;
         this.stopBtn.disabled = true;
-    }
-
-    showError(message) {
-        this.addMessage(message, 'error');
-        this.stopAssistant();
+        this.statusIndicator.className = 'status-indicator ready';
     }
 }
 
