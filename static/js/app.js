@@ -83,7 +83,7 @@ class VoiceAssistant {
         const formData = new FormData();
         formData.append('audio', audioBlob, 'input.wav');
 
-        fetch("http://localhost:9000/api/stream-process-audio", {
+        fetch("https://cae1-110-93-223-224.ngrok-free.app/api/stream-process-audio", {
             method: "POST",
             body: formData
         }).then(response => {
