@@ -127,8 +127,21 @@ class VoiceAssistant {
             this.addMessage("GPT Response: " + payload.value, "assistant");
         } else if (payload.type === "audio") {
             this.setStatus("Playing response...", "ready");
-            const audio = new Audio(`https://63f3-110-93-223-224.ngrok-free.app${payload.value}`);
-            audio.play();
+
+            const audioUrl = `https://63f3-110-93-223-224.ngrok-free.app${payload.value}`;
+            const audio = new Audio(audioUrl);
+
+            audio.addEventListener('canplaythrough', () => {
+                audio.play().catch(err => {
+                    console.error("⚠️ Audio playback failed:", err);
+                    alert("Autoplay blocked. Tap the play button below.");
+                });
+            });
+
+            // Fallback: add controls in case autoplay fails
+            audio.controls = true;
+            this.chatMessages.appendChild(audio);
+            this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
         } else if (payload.status === "error") {
             this.showError("Server Error: " + payload.message);
         }
